@@ -1,7 +1,8 @@
 # EventEase 🎟️
 
 EventEase is a Blazor WebAssembly (.NET 8) app for managing corporate and social events. You can browse and edit events, take registrations with validation, keep a user session, and check guests in with an attendance tracker.
-<img width="1336" height="814" alt="image" src="https://github.com/user-attachments/assets/3cff47c0-bf9d-4462-8e1a-0fce79f37a2b" />
+<img width="1148" height="718" alt="image" src="https://github.com/user-attachments/assets/655dc8b0-9dbc-498e-9dc8-76d9d03abebb" />
+
 
 ## Features
 
