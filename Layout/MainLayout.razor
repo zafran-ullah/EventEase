@@ -1,0 +1,96 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject SessionState Session
+@inject NavigationManager Nav
+
+<div class="app-shell">
+    <div class="bg-orbs" aria-hidden="true">
+        <span class="orb orb-1"></span>
+        <span class="orb orb-2"></span>
+        <span class="orb orb-3"></span>
+    </div>
+
+    <header class="topbar glass">
+        <a class="brand" href="" id="brand-link">
+            <span class="brand-mark">E</span>
+            <span class="brand-name">Event<span class="text-gradient">Ease</span></span>
+        </a>
+
+        <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="@navOpen" @onclick="() => navOpen = !navOpen">
+            <span></span><span></span><span></span>
+        </button>
+
+        <nav class="nav-links @(navOpen ? "open" : null)" aria-label="Main">
+            <NavLink href="" Match="NavLinkMatch.All" class="nav-link" id="nav-home">Home</NavLink>
+            <NavLink href="events" class="nav-link" id="nav-events">Events</NavLink>
+            <NavLink href="attendance" class="nav-link" id="nav-attendance">Attendance</NavLink>
+            <NavLink href="account" class="nav-link" id="nav-account">Account</NavLink>
+        </nav>
+
+        <div class="session-area">
+            @if (Session.IsAuthenticated && Session.Current is { } user)
+            {
+                <a href="account" class="session-chip" id="session-chip" title="@user.Email">
+                    <span class="avatar">@user.Initials</span>
+                    <span class="session-name">@user.FirstName</span>
+                </a>
+            }
+            else
+            {
+                <a href="account" class="btn btn-primary btn-sm" id="signin-link">Sign in</a>
+            }
+        </div>
+    </header>
+
+    <main class="page">
+        <ErrorBoundary @ref="errorBoundary">
+            <ChildContent>
+                @Body
+            </ChildContent>
+            <ErrorContent Context="ex">
+                <section class="panel glass empty-state" role="alert">
+                    <div class="empty-icon" aria-hidden="true">⚠️</div>
+                    <h1>Something went wrong</h1>
+                    <p class="muted">@ex.Message</p>
+                    <div class="actions center">
+                        <button class="btn btn-primary" id="error-retry" @onclick="() => errorBoundary?.Recover()">Try again</button>
+                        <a class="btn btn-ghost" href="">Go home</a>
+                    </div>
+                </section>
+            </ErrorContent>
+        </ErrorBoundary>
+    </main>
+
+    <footer class="footer">
+        <span>© @DateTime.Now.Year EventEase · Corporate &amp; social event management</span>
+        <span class="muted">Built with Blazor WebAssembly</span>
+    </footer>
+</div>
+
+@code {
+    private ErrorBoundary? errorBoundary;
+    private bool navOpen;
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += HandleSessionChanged;
+        Nav.LocationChanged += HandleLocationChanged;
+    }
+
+    private void HandleSessionChanged() => InvokeAsync(StateHasChanged);
+
+    // Routing fix: reset a tripped ErrorBoundary and close the mobile menu whenever the route changes,
+    // otherwise an error on one page would "stick" across navigation.
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        errorBoundary?.Recover();
+        navOpen = false;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Session.OnChange -= HandleSessionChanged;
+        Nav.LocationChanged -= HandleLocationChanged;
+    }
+}

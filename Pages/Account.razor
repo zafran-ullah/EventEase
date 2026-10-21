@@ -1,0 +1,145 @@
+@page "/account"
+@implements IDisposable
+@inject SessionState Session
+@inject RegistrationService Registrations
+@inject EventService Events
+@inject NavigationManager Nav
+
+<PageTitle>Account · EventEase</PageTitle>
+<HeadContent>
+    <meta name="description" content="Sign in to EventEase to manage your registrations and track attendance." />
+</HeadContent>
+
+@if (!Session.IsAuthenticated || Session.Current is null)
+{
+    <div class="auth-wrap">
+        <section class="panel glass auth-card">
+            <span class="brand-mark lg">E</span>
+            <h1>Welcome to EventEase</h1>
+            <p class="muted">Start a session to register faster, see your tickets and use the attendance tracker.</p>
+
+            <EditForm Model="signIn" OnValidSubmit="SignInAsync" class="form" id="signin-form">
+                <DataAnnotationsValidator />
+                <div class="field">
+                    <label for="signin-name">Name</label>
+                    <InputText id="signin-name" class="input" @bind-Value="signIn.Name" placeholder="Jane Doe" autocomplete="name" maxlength="60" />
+                    <ValidationMessage For="() => signIn.Name" />
+                </div>
+                <div class="field">
+                    <label for="signin-email">Email</label>
+                    <InputText id="signin-email" type="email" class="input" @bind-Value="signIn.Email" placeholder="jane@company.com" autocomplete="email" maxlength="120" />
+                    <ValidationMessage For="() => signIn.Email" />
+                </div>
+                <button type="submit" class="btn btn-primary btn-lg btn-block" id="signin-submit">Continue</button>
+            </EditForm>
+            <p class="muted small">Sessions are stored securely in this browser and expire after 8 hours of inactivity.</p>
+        </section>
+    </div>
+}
+else
+{
+    var user = Session.Current;
+    <header class="page-header">
+        <div class="profile">
+            <span class="avatar xl">@user.Initials</span>
+            <div>
+                <span class="eyebrow">My account</span>
+                <h1>@user.Name</h1>
+                <p class="muted">@user.Email · Session started @user.StartedAt.ToLocalTime().ToString("MMM d, h:mm tt")</p>
+            </div>
+        </div>
+        <button type="button" class="btn btn-ghost" id="signout" @onclick="SignOutAsync">Sign out</button>
+    </header>
+
+    <section class="section">
+        <div class="section-head"><h2>My registrations</h2></div>
+        @if (mine.Count == 0)
+        {
+            <div class="panel glass empty-state small">
+                <div class="empty-icon" aria-hidden="true">🎫</div>
+                <p class="muted">You haven't registered for any events yet.</p>
+                <a href="events" class="btn btn-primary" id="account-browse">Find an event</a>
+            </div>
+        }
+        else
+        {
+            <div class="reg-list">
+                @foreach (var r in mine)
+                {
+                    var ev = Events.GetById(r.EventId);
+                    <article class="reg-item glass" @key="r.Id">
+                        <div class="reg-date">
+                            <span class="date-month">@(ev?.Date.ToString("MMM") ?? "—")</span>
+                            <span class="date-day">@(ev?.Date.Day.ToString() ?? "")</span>
+                        </div>
+                        <div class="reg-info">
+                            @if (ev is not null)
+                            {
+                                <a href="events/@ev.Id" class="reg-title">@ev.Name</a>
+                                <span class="muted small">@ev.Location · @ev.Date.ToString("h:mm tt")</span>
+                            }
+                            else
+                            {
+                                <span class="reg-title">Event removed</span>
+                            }
+                        </div>
+                        <code class="mono">@r.ConfirmationCode</code>
+                        <span>@r.Tickets ticket(s)</span>
+                        @if (r.CheckedIn)
+                        {
+                            <span class="pill pill-success">Checked in</span>
+                        }
+                        else
+                        {
+                            <span class="pill pill-muted">Upcoming</span>
+                            <button type="button" class="btn btn-icon danger" title="Cancel registration" aria-label="Cancel registration"
+                                    @onclick="() => Registrations.CancelAsync(r.Id)">✕</button>
+                        }
+                    </article>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+
+    private SignInModel signIn = new();
+    private List<Registration> mine = [];
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += HandleChange;
+        Registrations.OnChange += HandleChange;
+        Events.OnChange += HandleChange;
+        Load();
+    }
+
+    private void Load() =>
+        mine = Session.IsAuthenticated && Session.Current is { } u ? Registrations.ForEmail(u.Email) : [];
+
+    private async Task SignInAsync()
+    {
+        await Session.SignInAsync(signIn.Name, signIn.Email);
+        signIn = new();
+        // Routing/security fix: only follow app-local return URLs.
+        if (Text.SafeLocalPath(ReturnUrl) is { } target)
+            Nav.NavigateTo(target);
+    }
+
+    private async Task SignOutAsync()
+    {
+        await Session.SignOutAsync();
+        Nav.NavigateTo("account", replace: true);
+    }
+
+    private void HandleChange() => InvokeAsync(() => { Load(); StateHasChanged(); });
+
+    public void Dispose()
+    {
+        Session.OnChange -= HandleChange;
+        Registrations.OnChange -= HandleChange;
+        Events.OnChange -= HandleChange;
+    }
+}

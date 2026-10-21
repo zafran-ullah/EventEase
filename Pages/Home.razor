@@ -1,0 +1,114 @@
+@page "/"
+@implements IDisposable
+@inject EventService Events
+@inject RegistrationService Registrations
+@inject SessionState Session
+
+<PageTitle>EventEase · Corporate &amp; social event management</PageTitle>
+<HeadContent>
+    <meta name="description" content="EventEase helps teams plan corporate and social events, manage registrations and track attendance in real time." />
+</HeadContent>
+
+<section class="hero">
+    <div class="hero-copy">
+        <span class="eyebrow">✦ Event management, reimagined</span>
+        <h1>Plan, fill and track <span class="text-gradient">unforgettable events</span>.</h1>
+        <p class="lead">
+            @if (Session.IsAuthenticated)
+            {
+                <text>Welcome back, <strong>@Session.Current!.FirstName</strong>. </text>
+            }
+            From intimate workshops to 400-seat galas — publish events, take validated registrations and check guests in at the door, all in one place.
+        </p>
+        <div class="actions">
+            <a href="events" class="btn btn-primary btn-lg" id="hero-browse">Browse events →</a>
+            <a href="attendance" class="btn btn-ghost btn-lg" id="hero-attendance">Attendance tracker</a>
+        </div>
+    </div>
+
+    <div class="hero-stats">
+        <div class="stat-card glass">
+            <span class="stat-icon">📅</span>
+            <span class="stat-value">@upcomingCount</span>
+            <span class="stat-label">Upcoming events</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">🎟️</span>
+            <span class="stat-value">@ticketCount</span>
+            <span class="stat-label">Tickets booked</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">✅</span>
+            <span class="stat-value">@checkedInCount</span>
+            <span class="stat-label">Guests checked in</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">💺</span>
+            <span class="stat-value">@seatsAvailable</span>
+            <span class="stat-label">Seats available</span>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="section-head">
+        <h2>Coming up next</h2>
+        <a href="events" class="link-arrow" id="view-all-events">View all events →</a>
+    </div>
+    <div class="card-grid">
+        @foreach (var ev in featured)
+        {
+            <EventCard @key="ev.Id" Event="ev" AllowEdit="false" />
+        }
+    </div>
+</section>
+
+<section class="section features">
+    <div class="feature glass">
+        <span class="feature-icon">⚡</span>
+        <h3>Inline editing</h3>
+        <p class="muted">Edit any event card in place with live, two-way bound previews and instant validation.</p>
+    </div>
+    <div class="feature glass">
+        <span class="feature-icon">🛡️</span>
+        <h3>Validated registration</h3>
+        <p class="muted">Strict field rules plus capacity and duplicate checks keep your guest list clean.</p>
+    </div>
+    <div class="feature glass">
+        <span class="feature-icon">📊</span>
+        <h3>Live attendance</h3>
+        <p class="muted">Check guests in by name or confirmation code and watch attendance update in real time.</p>
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<Event> featured = [];
+    private int upcomingCount, ticketCount, checkedInCount, seatsAvailable;
+
+    protected override void OnInitialized()
+    {
+        Load();
+        Events.OnChange += HandleChange;
+        Registrations.OnChange += HandleChange;
+        Session.OnChange += HandleChange;
+    }
+
+    private void Load()
+    {
+        var upcoming = Events.GetUpcoming();
+        featured = upcoming.Take(3).ToList();
+        upcomingCount = upcoming.Count;
+        ticketCount = Registrations.All.Sum(r => r.Tickets);
+        checkedInCount = Registrations.All.Where(r => r.CheckedIn).Sum(r => r.Tickets);
+        seatsAvailable = upcoming.Sum(Registrations.SeatsRemaining);
+    }
+
+    private void HandleChange() => InvokeAsync(() => { Load(); StateHasChanged(); });
+
+    public void Dispose()
+    {
+        Events.OnChange -= HandleChange;
+        Registrations.OnChange -= HandleChange;
+        Session.OnChange -= HandleChange;
+    }
+}

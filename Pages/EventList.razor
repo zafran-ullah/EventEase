@@ -1,0 +1,152 @@
+@page "/events"
+@implements IDisposable
+@inject EventService Events
+@inject RegistrationService Registrations
+
+<PageTitle>Events · EventEase</PageTitle>
+<HeadContent>
+    <meta name="description" content="Browse, search and edit upcoming corporate and social events on EventEase." />
+</HeadContent>
+
+<header class="page-header">
+    <div>
+        <span class="eyebrow">Catalogue</span>
+        <h1>All events</h1>
+        <p class="muted">Click ✎ on any card to edit it inline — changes flow back through two-way binding and are saved instantly.</p>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="reset-events" @onclick="ResetAsync">Reset sample data</button>
+</header>
+
+<div class="toolbar glass">
+    <label class="search" for="event-search">
+        <span aria-hidden="true">🔍</span>
+        <input id="event-search" type="search" placeholder="Search by name or location…" maxlength="60"
+               value="@searchInput" @oninput="OnSearchInput" aria-label="Search events" autocomplete="off" />
+    </label>
+    <select id="category-filter" class="input select" @bind="categoryFilter" @bind:after="ApplyFilter" aria-label="Filter by category">
+        <option value="">All categories</option>
+        @foreach (var c in Enum.GetValues<EventCategory>())
+        {
+            <option value="@c">@c</option>
+        }
+    </select>
+    <label class="check" for="available-only">
+        <input type="checkbox" id="available-only" @bind="availableOnly" @bind:after="ApplyFilter" />
+        <span>Seats available</span>
+    </label>
+</div>
+
+@if (status is not null)
+{
+    <div class="toast @(statusIsError ? "toast-error" : "toast-success")" role="status" id="events-status">@status</div>
+}
+
+<p class="result-count">@filtered.Count of @total events</p>
+
+@if (filtered.Count == 0)
+{
+    <section class="panel glass empty-state small">
+        <div class="empty-icon" aria-hidden="true">🔎</div>
+        <h2>No events match your filters</h2>
+        <p class="muted">Try a different search term or clear the filters.</p>
+        <button class="btn btn-ghost" id="clear-filters" @onclick="ClearFilters">Clear filters</button>
+    </section>
+}
+else
+{
+    <div class="card-grid">
+        @foreach (var ev in filtered)
+        {
+            @* @key preserves component instances (and any in-progress edits) when the list is re-filtered. *@
+            <EventCard @key="ev.Id" Event="ev" EventChanged="SaveAsync" />
+        }
+    </div>
+}
+
+@code {
+    private List<Event> filtered = [];
+    private int total;
+    private string searchInput = string.Empty;
+    private string searchTerm = string.Empty;
+    private string categoryFilter = string.Empty;
+    private bool availableOnly;
+    private string? status;
+    private bool statusIsError;
+    private CancellationTokenSource? debounceCts;
+
+    protected override void OnInitialized()
+    {
+        ApplyFilter();
+        Events.OnChange += HandleChange;
+        Registrations.OnChange += HandleChange;
+    }
+
+    // Performance: debounce keystrokes so filtering runs once the user pauses typing.
+    private async Task OnSearchInput(ChangeEventArgs e)
+    {
+        searchInput = e.Value?.ToString() ?? string.Empty;
+        debounceCts?.Cancel();
+        debounceCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(250, debounceCts.Token);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+        searchTerm = Text.Sanitize(searchInput);
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var all = Events.GetAll();
+        total = all.Count;
+        IEnumerable<Event> query = all;
+
+        if (searchTerm.Length > 0)
+            query = query.Where(e => e.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
+                                  || e.Location.Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
+
+        // Input validation: ignore unknown category values instead of throwing.
+        if (Enum.TryParse<EventCategory>(categoryFilter, out var cat))
+            query = query.Where(e => e.Category == cat);
+
+        if (availableOnly)
+            query = query.Where(e => !e.IsPast && Registrations.SeatsRemaining(e) > 0);
+
+        filtered = query.ToList();
+    }
+
+    private async Task SaveAsync(Event updated)
+    {
+        var errors = await Events.UpdateAsync(updated);
+        statusIsError = errors.Count > 0;
+        status = statusIsError ? $"Couldn't save: {string.Join(" ", errors)}" : $"“{updated.Name}” saved.";
+    }
+
+    private async Task ResetAsync()
+    {
+        await Events.ResetAsync();
+        statusIsError = false;
+        status = "Sample events restored.";
+    }
+
+    private void ClearFilters()
+    {
+        searchInput = searchTerm = categoryFilter = string.Empty;
+        availableOnly = false;
+        ApplyFilter();
+    }
+
+    private void HandleChange() => InvokeAsync(() => { ApplyFilter(); StateHasChanged(); });
+
+    public void Dispose()
+    {
+        debounceCts?.Cancel();
+        debounceCts?.Dispose();
+        Events.OnChange -= HandleChange;
+        Registrations.OnChange -= HandleChange;
+    }
+}

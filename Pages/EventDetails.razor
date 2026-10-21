@@ -1,0 +1,118 @@
+@page "/events/{Id:int}"
+@implements IDisposable
+@inject EventService Events
+@inject RegistrationService Registrations
+@inject SessionState Session
+
+@if (ev is null)
+{
+    <NotFoundView Title="Event not found" Message="@($"We couldn't find an event with ID {Id}. It may have been removed or the link is incorrect.")" />
+}
+else
+{
+    <PageTitle>@ev.Name · EventEase</PageTitle>
+    <HeadContent>
+        <meta name="description" content="@($"{ev.Name} — {ev.Date:MMMM d} at {ev.Location}. Register on EventEase.")" />
+    </HeadContent>
+
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="events" id="breadcrumb-events">Events</a>
+        <span aria-hidden="true">/</span>
+        <span>@ev.Name</span>
+    </nav>
+
+    @if (status is not null)
+    {
+        <div class="toast @(statusIsError ? "toast-error" : "toast-success")" role="status">@status</div>
+    }
+
+    <div class="details-layout">
+        <div>
+            @* Two-way binding: the card writes back to `ev`, then :after persists it. *@
+            <EventCard @bind-Event="ev" @bind-Event:after="PersistAsync" ShowActions="false" ShowDescription="false" />
+        </div>
+
+        <section class="panel glass details-panel">
+            <span class="eyebrow">@ev.Category</span>
+            <h1>@ev.Name</h1>
+            <p class="lead">@ev.Description</p>
+
+            <dl class="meta-list">
+                <div><dt>Date</dt><dd>@ev.Date.ToString("dddd, MMMM d, yyyy")</dd></div>
+                <div><dt>Time</dt><dd>@ev.Date.ToString("h:mm tt")</dd></div>
+                <div><dt>Location</dt><dd>@ev.Location</dd></div>
+                <div><dt>Capacity</dt><dd>@ev.Capacity seats</dd></div>
+                <div><dt>Booked</dt><dd>@Registrations.SeatsTaken(ev.Id)</dd></div>
+                <div><dt>Remaining</dt><dd class="text-accent">@Registrations.SeatsRemaining(ev)</dd></div>
+            </dl>
+
+            <div class="actions">
+                @if (alreadyRegistered)
+                {
+                    <span class="pill pill-success" id="already-registered">✓ You're registered</span>
+                }
+                else if (ev.IsPast)
+                {
+                    <span class="pill pill-muted">Registration closed</span>
+                }
+                else if (Registrations.SeatsRemaining(ev) == 0)
+                {
+                    <span class="pill pill-danger">Sold out</span>
+                }
+                else
+                {
+                    <a href="events/@ev.Id/register" class="btn btn-primary btn-lg" id="details-register">Register now →</a>
+                }
+                <a href="attendance/@ev.Id" class="btn btn-ghost btn-lg" id="details-attendance">Track attendance</a>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private Event? ev;
+    private bool alreadyRegistered;
+    private string? status;
+    private bool statusIsError;
+
+    protected override void OnInitialized()
+    {
+        Events.OnChange += HandleChange;
+        Registrations.OnChange += HandleChange;
+        Session.OnChange += HandleChange;
+    }
+
+    // Routing fix: load in OnParametersSet (not OnInitialized) so navigating
+    // from /events/1 to /events/2 re-uses the component AND refreshes the data.
+    protected override void OnParametersSet()
+    {
+        status = null;
+        Load();
+    }
+
+    private void Load()
+    {
+        ev = Events.GetById(Id)?.Clone();
+        alreadyRegistered = ev is not null && Session.IsAuthenticated && Registrations.IsRegistered(ev.Id, Session.Current!.Email);
+    }
+
+    private async Task PersistAsync()
+    {
+        if (ev is null) return;
+        var errors = await Events.UpdateAsync(ev);
+        statusIsError = errors.Count > 0;
+        status = statusIsError ? $"Couldn't save: {string.Join(" ", errors)}" : "Event updated.";
+        if (statusIsError) Load(); // roll back to the stored version
+    }
+
+    private void HandleChange() => InvokeAsync(() => { Load(); StateHasChanged(); });
+
+    public void Dispose()
+    {
+        Events.OnChange -= HandleChange;
+        Registrations.OnChange -= HandleChange;
+        Session.OnChange -= HandleChange;
+    }
+}

@@ -1,0 +1,192 @@
+@* 
+    EventCard – foundational, reusable event component.
+    Supports two-way binding via @bind-Event (Event + EventChanged).
+    Edits are made on a draft copy; the parent is only notified on a valid Save.
+*@
+@inject RegistrationService Registrations
+
+<article class="event-card glass @(isEditing ? "is-editing" : null)" id="event-card-@Event.Id">
+    <div class="event-cover cover-@Current.Category.ToString().ToLowerInvariant()">
+        <div class="cover-pattern" aria-hidden="true"></div>
+        <span class="chip chip-glass">@Icon(Current.Category) @Current.Category</span>
+        <time class="date-badge" datetime="@Current.Date.ToString("s")">
+            <span class="date-month">@Current.Date.ToString("MMM")</span>
+            <span class="date-day">@Current.Date.Day</span>
+        </time>
+    </div>
+
+    <div class="event-body">
+        @if (isEditing && editContext is not null)
+        {
+            <h3 class="event-title preview" title="Live preview">@(string.IsNullOrWhiteSpace(draft.Name) ? "Untitled event" : draft.Name)</h3>
+            <EditForm EditContext="editContext" OnValidSubmit="SaveAsync" class="card-form">
+                <DataAnnotationsValidator />
+
+                <div class="field">
+                    <label for="edit-name-@Event.Id">Event name</label>
+                    <LiveInputText id="@($"edit-name-{Event.Id}")" class="input" @bind-Value="draft.Name" maxlength="80" />
+                    <ValidationMessage For="() => draft.Name" />
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="edit-date-@Event.Id">Date &amp; time</label>
+                        <InputDate id="@($"edit-date-{Event.Id}")" Type="InputDateType.DateTimeLocal" class="input" @bind-Value="draft.Date" />
+                        <ValidationMessage For="() => draft.Date" />
+                    </div>
+                    <div class="field">
+                        <label for="edit-category-@Event.Id">Category</label>
+                        <InputSelect id="@($"edit-category-{Event.Id}")" class="input" @bind-Value="draft.Category">
+                            @foreach (var c in Enum.GetValues<EventCategory>())
+                            {
+                                <option value="@c">@c</option>
+                            }
+                        </InputSelect>
+                    </div>
+                </div>
+
+                <div class="field-row">
+                    <div class="field grow">
+                        <label for="edit-location-@Event.Id">Location</label>
+                        <LiveInputText id="@($"edit-location-{Event.Id}")" class="input" @bind-Value="draft.Location" maxlength="100" />
+                        <ValidationMessage For="() => draft.Location" />
+                    </div>
+                    <div class="field narrow">
+                        <label for="edit-capacity-@Event.Id">Capacity</label>
+                        <InputNumber id="@($"edit-capacity-{Event.Id}")" class="input" @bind-Value="draft.Capacity" min="1" max="10000" />
+                    </div>
+                </div>
+                <ValidationMessage For="() => draft.Capacity" />
+
+                <div class="field">
+                    <label for="edit-desc-@Event.Id">Description <small class="muted">(@(draft.Description?.Length ?? 0)/500)</small></label>
+                    <InputTextArea id="@($"edit-desc-{Event.Id}")" class="input" rows="3" @bind-Value="draft.Description" maxlength="500" />
+                    <ValidationMessage For="() => draft.Description" />
+                </div>
+
+                <div class="card-actions">
+                    <button type="submit" class="btn btn-primary btn-sm" id="save-event-@Event.Id">Save changes</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="cancel-edit-@Event.Id" @onclick="CancelEdit">Cancel</button>
+                </div>
+            </EditForm>
+        }
+        else
+        {
+            <h3 class="event-title">@Event.Name</h3>
+            <p class="event-meta"><span aria-hidden="true">📍</span> @Event.Location</p>
+            <p class="event-meta"><span aria-hidden="true">🕒</span> @Event.Date.ToString("ddd, MMM d · h:mm tt")</p>
+            @if (ShowDescription)
+            {
+                <p class="event-desc">@Event.Description</p>
+            }
+
+            <div class="capacity">
+                <div class="capacity-head">
+                    <span>@taken / @Event.Capacity booked</span>
+                    <span class="@(remaining == 0 ? "text-danger" : "text-accent")">
+                        @(Event.IsPast ? "Closed" : remaining == 0 ? "Sold out" : $"{remaining} left")
+                    </span>
+                </div>
+                <div class="progress" role="progressbar" aria-valuenow="@percent" aria-valuemin="0" aria-valuemax="100">
+                    <span style="width:@(percent)%"></span>
+                </div>
+            </div>
+
+            <div class="card-actions">
+                @if (ShowActions)
+                {
+                    <a href="events/@Event.Id" class="btn btn-ghost btn-sm" id="details-@Event.Id">Details</a>
+                    @if (remaining > 0 && !Event.IsPast)
+                    {
+                        <a href="events/@Event.Id/register" class="btn btn-primary btn-sm" id="register-@Event.Id">Register</a>
+                    }
+                    else
+                    {
+                        <span class="btn btn-primary btn-sm disabled" aria-disabled="true">Unavailable</span>
+                    }
+                }
+                @if (AllowEdit)
+                {
+                    <button type="button" class="btn btn-icon" id="edit-event-@Event.Id" title="Edit event" aria-label="Edit @Event.Name" @onclick="StartEdit">✎</button>
+                }
+            </div>
+        }
+    </div>
+</article>
+
+@code {
+    /// <summary>The event to display. Use with @bind-Event for two-way binding.</summary>
+    [Parameter, EditorRequired] public Event Event { get; set; } = default!;
+
+    /// <summary>Raised with the updated event after a valid save.</summary>
+    [Parameter] public EventCallback<Event> EventChanged { get; set; }
+
+    [Parameter] public bool AllowEdit { get; set; } = true;
+    [Parameter] public bool ShowActions { get; set; } = true;
+    [Parameter] public bool ShowDescription { get; set; } = true;
+
+    private Event draft = new();
+    private EditContext? editContext;
+    private ValidationMessageStore? messageStore;
+    private bool isEditing;
+
+    private int taken;
+    private int remaining;
+    private int percent;
+
+    /// <summary>What the cover renders: the live draft while editing, otherwise the bound event.</summary>
+    private Event Current => isEditing ? draft : Event;
+
+    protected override void OnParametersSet()
+    {
+        if (Event is null) throw new InvalidOperationException($"{nameof(EventCard)} requires an {nameof(Event)} parameter.");
+        taken = Registrations.SeatsTaken(Event.Id);
+        remaining = Math.Max(0, Event.Capacity - taken);
+        percent = Event.Capacity == 0 ? 0 : Math.Min(100, taken * 100 / Event.Capacity);
+    }
+
+    private void StartEdit()
+    {
+        draft = Event.Clone();
+        editContext = new EditContext(draft);
+        messageStore = new ValidationMessageStore(editContext);
+        editContext.OnValidationRequested += ValidateBusinessRules;
+        editContext.OnFieldChanged += (_, e) => messageStore.Clear(e.FieldIdentifier);
+        isEditing = true;
+    }
+
+    // Rules that depend on app state rather than the model alone.
+    private void ValidateBusinessRules(object? sender, ValidationRequestedEventArgs e)
+    {
+        messageStore!.Clear();
+        if (draft.Capacity < taken)
+            messageStore.Add(() => draft.Capacity, $"Capacity can't be lower than the {taken} seat(s) already booked.");
+    }
+
+    private void CancelEdit() => EndEdit();
+
+    private async Task SaveAsync()
+    {
+        var updated = draft;
+        EndEdit();
+        await EventChanged.InvokeAsync(updated);
+    }
+
+    private void EndEdit()
+    {
+        if (editContext is not null) editContext.OnValidationRequested -= ValidateBusinessRules;
+        editContext = null;
+        messageStore = null;
+        isEditing = false;
+    }
+
+    private static string Icon(EventCategory c) => c switch
+    {
+        EventCategory.Conference => "🎤",
+        EventCategory.Workshop => "🛠️",
+        EventCategory.Networking => "🤝",
+        EventCategory.Gala => "🥂",
+        EventCategory.Webinar => "💻",
+        _ => "📅"
+    };
+}

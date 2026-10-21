@@ -1,0 +1,289 @@
+@page "/attendance"
+@page "/attendance/{EventId:int}"
+@implements IDisposable
+@inject EventService Events
+@inject RegistrationService Registrations
+@inject SessionState Session
+@inject NavigationManager Nav
+
+<PageTitle>Attendance tracker · EventEase</PageTitle>
+<HeadContent>
+    <meta name="description" content="Track event check-ins and attendance rates in real time with EventEase." />
+</HeadContent>
+
+@if (!Session.IsAuthenticated)
+{
+    <section class="panel glass empty-state">
+        <div class="empty-icon" aria-hidden="true">🔒</div>
+        <h1>Sign in to track attendance</h1>
+        <p class="muted">The attendance tracker is available to signed-in organisers.</p>
+        <div class="actions center">
+            <a class="btn btn-primary" id="attendance-signin" href="@($"account?returnUrl={Uri.EscapeDataString(CurrentRelativePath)}")">Sign in</a>
+        </div>
+    </section>
+}
+else if (EventId is not null && selected is null)
+{
+    <NotFoundView Title="Event not found" Message="@($"There's no event with ID {EventId} to track attendance for.")" />
+}
+else if (selected is null)
+{
+    <NotFoundView Title="No events yet" Message="Create an event first to start tracking attendance." />
+}
+else
+{
+    <header class="page-header">
+        <div>
+            <span class="eyebrow">Attendance tracker</span>
+            <h1>@selected.Name</h1>
+            <p class="muted">@selected.Date.ToString("dddd, MMM d · h:mm tt") · @selected.Location</p>
+        </div>
+        <select id="attendance-event" class="input select" value="@selected.Id" @onchange="OnEventSelected" aria-label="Choose event">
+            @foreach (var e in allEvents)
+            {
+                <option value="@e.Id">@e.Name</option>
+            }
+        </select>
+    </header>
+
+    <div class="stats-row">
+        <div class="stat-card glass ring-card">
+            <svg viewBox="0 0 120 120" class="ring" aria-hidden="true">
+                <circle cx="60" cy="60" r="52" class="ring-track" />
+                <circle cx="60" cy="60" r="52" class="ring-fill" style="stroke-dasharray:@RingDash" />
+            </svg>
+            <div class="ring-label">
+                <span class="stat-value">@rate%</span>
+                <span class="stat-label">Attendance</span>
+            </div>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">🎟️</span>
+            <span class="stat-value">@ticketsBooked</span>
+            <span class="stat-label">Tickets booked</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">✅</span>
+            <span class="stat-value">@ticketsCheckedIn</span>
+            <span class="stat-label">Checked in</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">⏳</span>
+            <span class="stat-value">@(ticketsBooked - ticketsCheckedIn)</span>
+            <span class="stat-label">Awaiting arrival</span>
+        </div>
+        <div class="stat-card glass">
+            <span class="stat-icon">💺</span>
+            <span class="stat-value">@Registrations.SeatsRemaining(selected)</span>
+            <span class="stat-label">Seats left</span>
+        </div>
+    </div>
+
+    <div class="tracker-grid">
+        <section class="panel glass quick-checkin">
+            <h2>Quick check-in</h2>
+            <p class="muted small">Enter a confirmation code (e.g. EE-7KQ2PX).</p>
+            <form class="inline-form" @onsubmit="QuickCheckInAsync" @onsubmit:preventDefault>
+                <input id="checkin-code" class="input mono" placeholder="EE-XXXXXX" maxlength="9" @bind="codeInput" @bind:event="oninput" autocomplete="off" aria-label="Confirmation code" />
+                <button type="submit" class="btn btn-primary" id="checkin-submit" disabled="@(!CodeLooksValid)">Check in</button>
+            </form>
+            @if (checkInMessage is not null)
+            {
+                <div class="toast @(checkInError ? "toast-error" : "toast-success")" role="status" id="checkin-result">@checkInMessage</div>
+            }
+            <hr class="divider" />
+            <button type="button" class="btn btn-ghost btn-sm btn-block" id="seed-attendees" @onclick="SeedAsync">+ Add demo attendees</button>
+        </section>
+
+        <section class="panel glass attendees">
+            <div class="attendee-toolbar">
+                <h2>Guest list <small class="muted">(@visible.Count)</small></h2>
+                <div class="toolbar-right">
+                    <input id="attendee-search" class="input" type="search" placeholder="Search guests…" maxlength="60"
+                           @bind="attendeeSearch" @bind:event="oninput" @bind:after="ApplyFilter" aria-label="Search guests" />
+                    <div class="segmented" role="group" aria-label="Status filter">
+                        @foreach (var f in Enum.GetValues<StatusFilter>())
+                        {
+                            <button type="button" id="filter-@f.ToString().ToLowerInvariant()" class="@(statusFilter == f ? "active" : null)" @onclick="() => SetFilter(f)">@f</button>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @if (visible.Count == 0)
+            {
+                <div class="empty-state small">
+                    <div class="empty-icon" aria-hidden="true">🪑</div>
+                    <p class="muted">No guests to show. Share the registration link or add demo attendees.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Guest</th><th>Tickets</th><th>Code</th><th>Status</th><th class="right">Actions</th></tr>
+                        </thead>
+                        <tbody>
+                            @* Performance: Virtualize renders only the rows in view, so large guest lists stay fast. *@
+                            <Virtualize Items="visible" Context="r" ItemSize="64" SpacerElement="tr" OverscanCount="6">
+                                <tr @key="r.Id" class="@(r.CheckedIn ? "row-checked" : null)">
+                                    <td>
+                                        <div class="attendee">
+                                            <span class="avatar sm">@Text.Initials(r.FullName)</span>
+                                            <div>
+                                                <strong>@r.FullName</strong>
+                                                <small class="muted">@r.Email</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>@r.Tickets</td>
+                                    <td><code class="mono">@r.ConfirmationCode</code></td>
+                                    <td>
+                                        @if (r.CheckedIn)
+                                        {
+                                            <span class="pill pill-success">Checked in @r.CheckedInAt?.ToString("h:mm tt")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="pill pill-muted">Pending</span>
+                                        }
+                                    </td>
+                                    <td class="right">
+                                        <button type="button" class="btn btn-sm @(r.CheckedIn ? "btn-ghost" : "btn-primary")" id="toggle-@r.ConfirmationCode"
+                                                @onclick="() => Registrations.SetCheckInAsync(r.Id, !r.CheckedIn)">
+                                            @(r.CheckedIn ? "Undo" : "Check in")
+                                        </button>
+                                        <button type="button" class="btn btn-icon danger" title="Remove registration" aria-label="Remove @r.FullName"
+                                                @onclick="() => Registrations.CancelAsync(r.Id)">✕</button>
+                                    </td>
+                                </tr>
+                            </Virtualize>
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public int? EventId { get; set; }
+
+    private enum StatusFilter { All, Pending, Arrived }
+
+    private IReadOnlyList<Event> allEvents = [];
+    private Event? selected;
+    private List<Registration> guests = [];
+    private List<Registration> visible = [];
+    private string attendeeSearch = string.Empty;
+    private StatusFilter statusFilter = StatusFilter.All;
+    private int ticketsBooked, ticketsCheckedIn, rate;
+    private string codeInput = string.Empty;
+    private string? checkInMessage;
+    private bool checkInError;
+
+    private string CurrentRelativePath => Nav.ToBaseRelativePath(Nav.Uri);
+    private bool CodeLooksValid => System.Text.RegularExpressions.Regex.IsMatch(codeInput.Trim(), "^EE-[A-Za-z0-9]{6}$");
+    private string RingDash
+    {
+        get
+        {
+            var circumference = 2 * Math.PI * 52;
+            var filled = circumference * rate / 100.0;
+            return FormattableString.Invariant($"{filled:0.##} {circumference:0.##}");
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Events.OnChange += HandleChange;
+        Registrations.OnChange += HandleChange;
+        Session.OnChange += HandleChange;
+    }
+
+    protected override void OnParametersSet()
+    {
+        checkInMessage = null;
+        Load();
+    }
+
+    private void Load()
+    {
+        allEvents = Events.GetAll();
+        selected = EventId is int id
+            ? Events.GetById(id)
+            : Events.GetUpcoming(1).FirstOrDefault() ?? allEvents.FirstOrDefault();
+        if (selected is null) return;
+
+        guests = Registrations.ForEvent(selected.Id);
+        ticketsBooked = guests.Sum(g => g.Tickets);
+        ticketsCheckedIn = guests.Where(g => g.CheckedIn).Sum(g => g.Tickets);
+        rate = ticketsBooked == 0 ? 0 : (int)Math.Round(ticketsCheckedIn * 100.0 / ticketsBooked);
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var term = Text.Sanitize(attendeeSearch);
+        IEnumerable<Registration> q = guests;
+        if (term.Length > 0)
+            q = q.Where(g => g.FullName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                          || g.Email.Contains(term, StringComparison.OrdinalIgnoreCase)
+                          || g.ConfirmationCode.Contains(term, StringComparison.OrdinalIgnoreCase));
+        q = statusFilter switch
+        {
+            StatusFilter.Pending => q.Where(g => !g.CheckedIn),
+            StatusFilter.Arrived => q.Where(g => g.CheckedIn),
+            _ => q
+        };
+        visible = q.ToList();
+    }
+
+    private void SetFilter(StatusFilter f)
+    {
+        statusFilter = f;
+        ApplyFilter();
+    }
+
+    // Routing: the selector navigates to the event's URL so the view is deep-linkable and back/forward works.
+    private void OnEventSelected(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id) && Events.GetById(id) is not null)
+            Nav.NavigateTo($"attendance/{id}");
+    }
+
+    private async Task QuickCheckInAsync()
+    {
+        if (selected is null || !CodeLooksValid)
+        {
+            (checkInError, checkInMessage) = (true, "Enter a code in the format EE-XXXXXX.");
+            return;
+        }
+        var reg = Registrations.FindByCode(selected.Id, codeInput);
+        if (reg is null)
+        {
+            (checkInError, checkInMessage) = (true, $"No registration with code {codeInput.Trim().ToUpperInvariant()} for this event.");
+            return;
+        }
+        if (reg.CheckedIn)
+        {
+            (checkInError, checkInMessage) = (true, $"{reg.FullName} is already checked in.");
+            return;
+        }
+        await Registrations.SetCheckInAsync(reg.Id, true);
+        (checkInError, checkInMessage) = (false, $"Welcome, {reg.FullName}! {reg.Tickets} ticket(s) checked in.");
+        codeInput = string.Empty;
+    }
+
+    private Task SeedAsync() => selected is null ? Task.CompletedTask : Registrations.SeedDemoAsync(selected.Id);
+
+    private void HandleChange() => InvokeAsync(() => { Load(); StateHasChanged(); });
+
+    public void Dispose()
+    {
+        Events.OnChange -= HandleChange;
+        Registrations.OnChange -= HandleChange;
+        Session.OnChange -= HandleChange;
+    }
+}

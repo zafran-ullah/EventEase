@@ -1,0 +1,16 @@
+<PageTitle>@Title · EventEase</PageTitle>
+
+<section class="panel glass empty-state" role="alert">
+    <div class="empty-icon" aria-hidden="true">🧭</div>
+    <h1>@Title</h1>
+    <p class="muted">@Message</p>
+    <div class="actions center">
+        <a class="btn btn-primary" href="events" id="notfound-browse">Browse events</a>
+        <a class="btn btn-ghost" href="" id="notfound-home">Go home</a>
+    </div>
+</section>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Page not found";
+    [Parameter] public string Message { get; set; } = "Sorry, there's nothing at this address. The link may be broken or the page may have moved.";
+}

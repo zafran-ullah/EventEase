@@ -1,0 +1,193 @@
+@page "/events/{EventId:int}/register"
+@inject EventService Events
+@inject RegistrationService Registrations
+@inject SessionState Session
+
+@if (ev is null)
+{
+    <NotFoundView Title="Event not found" Message="@($"There's no event with ID {EventId} to register for.")" />
+}
+else if (confirmation is not null)
+{
+    <PageTitle>You're in! · EventEase</PageTitle>
+    <section class="panel glass success-panel">
+        <div class="success-icon" aria-hidden="true">🎉</div>
+        <h1>You're registered!</h1>
+        <p class="lead">See you at <strong>@ev.Name</strong> on @ev.Date.ToString("dddd, MMMM d 'at' h:mm tt").</p>
+        <div class="ticket glass">
+            <div>
+                <span class="muted small">Confirmation code</span>
+                <strong class="code" id="confirmation-code">@confirmation.ConfirmationCode</strong>
+            </div>
+            <div>
+                <span class="muted small">Guest</span>
+                <strong>@confirmation.FullName</strong>
+            </div>
+            <div>
+                <span class="muted small">Tickets</span>
+                <strong>@confirmation.Tickets</strong>
+            </div>
+        </div>
+        <p class="muted small">Show this code at the door for quick check-in. A copy is saved under your account.</p>
+        <div class="actions center">
+            <a href="account" class="btn btn-primary" id="goto-account">View my registrations</a>
+            <a href="events" class="btn btn-ghost" id="goto-events">Browse more events</a>
+        </div>
+    </section>
+}
+else
+{
+    <PageTitle>Register · @ev.Name · EventEase</PageTitle>
+    <HeadContent>
+        <meta name="description" content="@($"Reserve your seat for {ev.Name} on EventEase.")" />
+    </HeadContent>
+
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="events">Events</a><span aria-hidden="true">/</span>
+        <a href="events/@ev.Id">@ev.Name</a><span aria-hidden="true">/</span>
+        <span>Register</span>
+    </nav>
+
+    <div class="form-layout">
+        <section class="panel glass">
+            <span class="eyebrow">Registration</span>
+            <h1>Reserve your seat</h1>
+            <p class="muted">for <strong>@ev.Name</strong> · @ev.Date.ToString("ddd, MMM d · h:mm tt")</p>
+
+            @if (closedReason is not null)
+            {
+                <div class="toast toast-error" role="alert">@closedReason</div>
+            }
+
+            <EditForm EditContext="editContext" OnValidSubmit="SubmitAsync" class="form" id="registration-form">
+                <DataAnnotationsValidator />
+                <ValidationSummary class="validation-summary" />
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="reg-name">Full name <span class="req">*</span></label>
+                        <InputText id="reg-name" class="input" @bind-Value="model.FullName" placeholder="Jane Doe" autocomplete="name" maxlength="60" />
+                        <ValidationMessage For="() => model.FullName" />
+                    </div>
+                    <div class="field">
+                        <label for="reg-email">Email <span class="req">*</span></label>
+                        <InputText id="reg-email" type="email" class="input" @bind-Value="model.Email" placeholder="jane@company.com" autocomplete="email" maxlength="120" />
+                        <ValidationMessage For="() => model.Email" />
+                    </div>
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="reg-phone">Phone <small class="muted">(optional)</small></label>
+                        <InputText id="reg-phone" type="tel" class="input" @bind-Value="model.Phone" placeholder="+92 300 1234567" autocomplete="tel" maxlength="20" />
+                        <ValidationMessage For="() => model.Phone" />
+                    </div>
+                    <div class="field">
+                        <label for="reg-company">Company <small class="muted">(optional)</small></label>
+                        <InputText id="reg-company" class="input" @bind-Value="model.Company" placeholder="Acme Inc." autocomplete="organization" maxlength="80" />
+                        <ValidationMessage For="() => model.Company" />
+                    </div>
+                </div>
+
+                <div class="field narrow-field">
+                    <label for="reg-tickets">Tickets <span class="req">*</span> <small class="muted">(@remaining remaining)</small></label>
+                    <InputNumber id="reg-tickets" class="input" @bind-Value="model.Tickets" min="1" max="@Math.Max(1, Math.Min(10, remaining))" />
+                    <ValidationMessage For="() => model.Tickets" />
+                </div>
+
+                <div class="field">
+                    <label for="reg-notes">Notes <small class="muted">(accessibility or dietary needs)</small></label>
+                    <InputTextArea id="reg-notes" class="input" rows="3" @bind-Value="model.Notes" maxlength="300" />
+                    <ValidationMessage For="() => model.Notes" />
+                </div>
+
+                <label class="check" for="reg-terms">
+                    <InputCheckbox id="reg-terms" @bind-Value="model.AcceptTerms" />
+                    <span>I agree to the event terms and privacy policy.</span>
+                </label>
+                <ValidationMessage For="() => model.AcceptTerms" />
+
+                <button type="submit" class="btn btn-primary btn-lg btn-block" id="reg-submit" disabled="@(isSubmitting || closedReason is not null)">
+                    @(isSubmitting ? "Registering…" : "Complete registration")
+                </button>
+            </EditForm>
+        </section>
+
+        <aside class="form-aside">
+            <EventCard Event="ev" AllowEdit="false" ShowActions="false" />
+            @if (!Session.IsAuthenticated)
+            {
+                <p class="muted small aside-note">Tip: registering also signs you in, so your details are pre-filled next time.</p>
+            }
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public int EventId { get; set; }
+
+    private Event? ev;
+    private RegistrationModel model = new();
+    private EditContext editContext = new(new RegistrationModel());
+    private ValidationMessageStore? serverMessages;
+    private Registration? confirmation;
+    private bool isSubmitting;
+    private int remaining;
+    private string? closedReason;
+    private int? loadedFor;
+
+    protected override void OnParametersSet()
+    {
+        ev = Events.GetById(EventId);
+        if (ev is null) return;
+
+        remaining = Registrations.SeatsRemaining(ev);
+        closedReason = ev.IsPast ? "Registration for this event has closed."
+                     : remaining == 0 ? "This event is sold out."
+                     : null;
+
+        if (loadedFor == EventId) return; // only reset the form when the route actually changes
+        loadedFor = EventId;
+        confirmation = null;
+
+        model = new RegistrationModel();
+        if (Session.IsAuthenticated && Session.Current is { } user)
+        {
+            model.FullName = user.Name;
+            model.Email = user.Email;
+        }
+
+        editContext = new EditContext(model);
+        serverMessages = new ValidationMessageStore(editContext);
+        // Clear business-rule errors for a field as soon as the user edits it.
+        editContext.OnFieldChanged += (_, e) => serverMessages.Clear(e.FieldIdentifier);
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (isSubmitting || ev is null) return; // guard against double-submit
+        isSubmitting = true;
+        serverMessages!.Clear();
+
+        try
+        {
+            var result = await Registrations.RegisterAsync(EventId, model);
+            if (result.Success)
+            {
+                confirmation = result.Registration;
+                if (!Session.IsAuthenticated)
+                    await Session.SignInAsync(model.FullName, model.Email);
+                return;
+            }
+
+            var field = result.Field is null ? new FieldIdentifier(model, string.Empty) : editContext.Field(result.Field);
+            serverMessages.Add(field, result.Error!);
+            editContext.NotifyValidationStateChanged();
+            remaining = Registrations.SeatsRemaining(ev);
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+}
